@@ -21,6 +21,7 @@ MMDVMDNPC.SelfCameraBaseCenter = MMDVMDNPC.SelfCameraBaseCenter or nil
 MMDVMDNPC.SelfCameraCenterOffset = MMDVMDNPC.SelfCameraCenterOffset or Vector(0, 0, 0)
 
 local DEBUG_REFERENCE_FRAME = -1
+local DEBUG_PREVIEW_TIMER = "MMDVMDNPCDebugPreviewPlay"
 local BUILD_DUMMY_SUPPRESSED_CVARS = { "skirt_vrd_auto_apply_all" }
 
 local function L(key, fallback)
@@ -103,6 +104,10 @@ CreateClientConVar("mmd_vmd_npc_music_enabled", "1", true, false, L("mmd_vmd_npc
 CreateClientConVar("mmd_vmd_npc_music_volume", tostring(MMDVMDNPC.DefaultMusicVolume or 1), true, false, L("mmd_vmd_npc.ui.music_volume"))
 CreateClientConVar("mmd_vmd_npc_build_frames_per_batch", tostring(MMDVMDNPC.DefaultBuildFramesPerBatch or 16), true, false, L("mmd_vmd_npc.ui.build_frames_per_batch"))
 CreateClientConVar("mmd_vmd_npc_playback_hz", tostring(MMDVMDNPC.DefaultPlaybackHz or 240), true, false, L("mmd_vmd_npc.ui.playback_updates_per_second"))
+CreateClientConVar("mmd_vmd_npc_flex_scale_all", "1", true, false, L("mmd_vmd_npc.debug.flex_scale_all"))
+CreateClientConVar("mmd_vmd_npc_flex_scale_eye", "1", true, false, L("mmd_vmd_npc.debug.flex_scale_eye"))
+CreateClientConVar("mmd_vmd_npc_flex_scale_brow", "1", true, false, L("mmd_vmd_npc.debug.flex_scale_brow"))
+CreateClientConVar("mmd_vmd_npc_flex_scale_mouth", "1", true, false, L("mmd_vmd_npc.debug.flex_scale_mouth"))
 
 local selected_options
 local play_ui_cue
@@ -1783,6 +1788,72 @@ hook.Add("Think", "MMDVMDNPCEyeTrackCameraBridge", function()
     send_eye_track_camera(true, viewOrigin or EyePos())
 end)
 
+local function convar_float(name, fallback)
+    local cvar = GetConVar(name)
+    if not cvar then return fallback end
+    local value = cvar:GetFloat()
+    if value ~= value then return fallback end
+    return value
+end
+
+local function flex_row_text(row)
+    return string.lower(table.concat({
+        tostring(row and row.mmd or ""),
+        tostring(row and row.source or ""),
+        tostring(row and row.resolvedName or ""),
+    }, " "))
+end
+
+local function text_has_any(text, patterns)
+    for _, pattern in ipairs(patterns) do
+        if string.find(text, pattern, 1, true) then return true end
+    end
+    return false
+end
+
+local FLEX_EYE_PATTERNS = {
+    "eye", "eyes", "blink", "wink", "look", "pupil", "iris",
+}
+
+local FLEX_BROW_PATTERNS = {
+    "brow", "eyebrow", "brows",
+}
+
+local FLEX_MOUTH_PATTERNS = {
+    "mouth", "lip", "lips", "jaw", "tongue", "teeth",
+}
+
+local function flex_category_scale(row)
+    local text = flex_row_text(row)
+    if text_has_any(text, FLEX_MOUTH_PATTERNS) then
+        return convar_float("mmd_vmd_npc_flex_scale_mouth", 1), "mouth"
+    end
+    if text_has_any(text, FLEX_BROW_PATTERNS) then
+        return convar_float("mmd_vmd_npc_flex_scale_brow", 1), "brow"
+    end
+    if text_has_any(text, FLEX_EYE_PATTERNS) then
+        return convar_float("mmd_vmd_npc_flex_scale_eye", 1), "eye"
+    end
+    return 1, "other"
+end
+
+local function flex_scale_for_row(row)
+    local allScale = convar_float("mmd_vmd_npc_flex_scale_all", 1)
+    local categoryScale, category = flex_category_scale(row)
+    return allScale * categoryScale, category
+end
+
+local function scaled_flex_weight(row)
+    local scale, category = flex_scale_for_row(row)
+    local raw = tonumber(row and row.weight) or 0
+    if row then
+        row.flexScale = scale
+        row.flexCategory = category
+        row.scaledWeight = math.Clamp(raw * scale, 0, 1)
+    end
+    return math.Clamp(raw * scale, 0, 1)
+end
+
 local function rebuild_debug_preview(rows, flexRows, targetEntIndex, sendToServer, targetOverride)
     local target = targetOverride or (targetEntIndex and targetEntIndex > 0 and Entity(targetEntIndex) or nil)
     if not IsValid(target) or not target.GetBoneCount then
@@ -1900,10 +1971,11 @@ local function rebuild_debug_preview(rows, flexRows, targetEntIndex, sendToServe
 
     local flexPacked = {}
     for _, row in ipairs(flexRows or {}) do
+        local weight = scaled_flex_weight(row)
         if row.resolved and row.flexID and row.flexID >= 0 then
             flexPacked[#flexPacked + 1] = {
                 flexID = row.flexID,
-                weight = math.Clamp(tonumber(row.weight) or 0, 0, 1),
+                weight = weight,
             }
         end
     end
@@ -1945,24 +2017,25 @@ local function refresh_flex_override_controls(frame, flexRows, targetEntIndex)
     frame.UnresolvedMorphCombo:Clear()
     frame.ModelFlexCombo:Clear()
 
-    local firstUnresolved
+    local firstMotionFlex
     for index, row in ipairs(flexRows or {}) do
-        if row and row.resolved ~= true then
-            local label = debug_flex_choice_label(row, index)
-            frame.UnresolvedMorphCombo:AddChoice(label)
-            frame.UnresolvedFlexChoices[label] = {
-                mmd = tostring(row.mmd or ""),
-                source = tostring(row.source or ""),
-            }
-            firstUnresolved = firstUnresolved or label
-        end
+        local label = debug_flex_choice_label(row, index)
+        frame.UnresolvedMorphCombo:AddChoice(label)
+        frame.UnresolvedFlexChoices[label] = {
+            mmd = tostring(row.mmd or ""),
+            source = tostring(row.source or ""),
+            resolved = row.resolved == true,
+            resolvedName = tostring(row.resolvedName or ""),
+            flexID = tonumber(row.flexID) or -1,
+        }
+        firstMotionFlex = firstMotionFlex or label
     end
 
-    if firstUnresolved then
-        frame.UnresolvedMorphCombo:SetValue(firstUnresolved)
+    if firstMotionFlex then
+        frame.UnresolvedMorphCombo:SetValue(firstMotionFlex)
         frame.UnresolvedMorphCombo:SetEnabled(true)
     else
-        frame.UnresolvedMorphCombo:SetValue(L("mmd_vmd_npc.debug.no_unresolved_flex"))
+        frame.UnresolvedMorphCombo:SetValue(L("mmd_vmd_npc.debug.no_motion_flex"))
         frame.UnresolvedMorphCombo:SetEnabled(false)
     end
 
@@ -1988,12 +2061,14 @@ local function refresh_flex_override_controls(frame, flexRows, targetEntIndex)
         frame.ModelFlexCombo:SetEnabled(false)
     end
 
-    local canAssign = firstUnresolved ~= nil and firstFlex ~= nil and targetEntIndex and targetEntIndex > 0
+    local canAssign = firstMotionFlex ~= nil and firstFlex ~= nil and targetEntIndex and targetEntIndex > 0
     if IsValid(frame.AssignFlexOverride) then frame.AssignFlexOverride:SetEnabled(canAssign) end
-    if IsValid(frame.ClearFlexOverride) then frame.ClearFlexOverride:SetEnabled(firstUnresolved ~= nil and targetEntIndex and targetEntIndex > 0) end
+    local canChangeMapping = firstMotionFlex ~= nil and targetEntIndex and targetEntIndex > 0
+    if IsValid(frame.UnassignFlexOverride) then frame.UnassignFlexOverride:SetEnabled(canChangeMapping) end
+    if IsValid(frame.ClearFlexOverride) then frame.ClearFlexOverride:SetEnabled(canChangeMapping) end
 end
 
-local function request_flex_override(frame, clear)
+local function request_flex_override(frame, mode)
     if not IsValid(frame) then return end
 
     local row = selected_debug_flex_row(frame)
@@ -2002,15 +2077,22 @@ local function request_flex_override(frame, clear)
     local ent = frame.TargetEntIndex and Entity(frame.TargetEntIndex) or nil
     if not IsValid(ent) then return end
 
-    local flexName = clear and "" or selected_debug_model_flex(frame)
-    if not clear and (not flexName or flexName == "") then return end
+    local flexName = mode == "save" and selected_debug_model_flex(frame) or ""
+    if mode == "save" and (not flexName or flexName == "") then return end
 
-    net.Start(clear and "mmdvmd_flex_override_clear" or "mmdvmd_flex_override_save")
+    local message = "mmdvmd_flex_override_save"
+    if mode == "clear" then
+        message = "mmdvmd_flex_override_clear"
+    elseif mode == "unassign" then
+        message = "mmdvmd_flex_override_unassign"
+    end
+
+    net.Start(message)
         net.WriteEntity(ent)
         net.WriteString(tostring(frame.MotionID or ""))
         net.WriteString(tostring(row.mmd or ""))
         net.WriteString(tostring(row.source or ""))
-        if not clear then
+        if mode == "save" then
             net.WriteString(tostring(flexName or ""))
         end
     net.SendToServer()
@@ -2020,6 +2102,66 @@ local function request_flex_override(frame, clear)
             MMDVMDNPC.OpenDebugMenu(frame.MotionID, frame.ActiveFrame or frame.RequestedFrame or 0)
         end
     end)
+end
+
+local function update_debug_preview_play_buttons(frame)
+    if not IsValid(frame) then return end
+
+    local playing = frame.DebugPreviewPlaying == true
+    if IsValid(frame.PlayPreview) then
+        frame.PlayPreview:SetEnabled(not playing)
+    end
+    if IsValid(frame.PausePreview) then
+        frame.PausePreview:SetEnabled(playing)
+    end
+end
+
+local function set_debug_preview_playing(frame, playing)
+    if not IsValid(frame) then return end
+
+    frame.DebugPreviewPlaying = playing == true
+    if not frame.DebugPreviewPlaying then
+        timer.Remove(DEBUG_PREVIEW_TIMER)
+    end
+    update_debug_preview_play_buttons(frame)
+end
+
+local function schedule_debug_preview_next(frame, fps)
+    if not IsValid(frame) or frame.DebugPreviewPlaying ~= true then return end
+
+    local delay = 1 / math.max(1, tonumber(fps) or MMDVMDNPC.VMDFPS or 30)
+    timer.Remove(DEBUG_PREVIEW_TIMER)
+    timer.Create(DEBUG_PREVIEW_TIMER, delay, 1, function()
+        local activeFrame = MMDVMDNPC.DebugFrame
+        if not IsValid(activeFrame) or activeFrame.DebugPreviewPlaying ~= true then return end
+
+        local endFrame = tonumber(activeFrame.EndFrame) or 0
+        local nextFrame = tonumber(activeFrame.NextFrame) or ((tonumber(activeFrame.ActiveFrame) or 0) + 1)
+        if nextFrame > endFrame then
+            set_debug_preview_playing(activeFrame, false)
+            return
+        end
+
+        MMDVMDNPC.OpenDebugMenu(activeFrame.MotionID, nextFrame)
+    end)
+end
+
+local function start_debug_preview_playback(frame)
+    if not IsValid(frame) then return end
+
+    set_debug_preview_playing(frame, true)
+    local startFrame = tonumber(frame.StartFrame) or 0
+    local endFrame = tonumber(frame.EndFrame) or startFrame
+    local activeFrame = tonumber(frame.ActiveFrame) or DEBUG_REFERENCE_FRAME
+    local nextFrame
+
+    if activeFrame < startFrame or activeFrame >= endFrame then
+        nextFrame = startFrame
+    else
+        nextFrame = tonumber(frame.NextFrame) or (activeFrame + 1)
+    end
+
+    MMDVMDNPC.OpenDebugMenu(frame.MotionID, math.Clamp(math.floor(nextFrame), startFrame, endFrame))
 end
 
 function MMDVMDNPC.OpenDebugMenu(motionID, vmdFrame)
@@ -2037,6 +2179,9 @@ function MMDVMDNPC.OpenDebugMenu(motionID, vmdFrame)
         frame:SetSize(math.min(screenW - 40, 1360), math.min(screenH - 40, 800))
         frame:Center()
         frame:MakePopup()
+        frame.OnClose = function()
+            set_debug_preview_playing(frame, false)
+        end
 
         frame.Summary = vgui.Create("DLabel", frame)
         frame.Summary:Dock(TOP)
@@ -2061,6 +2206,7 @@ function MMDVMDNPC.OpenDebugMenu(motionID, vmdFrame)
         frame.FlexRows:AddColumn(L("mmd_vmd_npc.debug.column_mmd_morph"))
         frame.FlexRows:AddColumn(L("mmd_vmd_npc.debug.column_source_flex"))
         frame.FlexRows:AddColumn(L("mmd_vmd_npc.debug.column_weight"))
+        frame.FlexRows:AddColumn(L("mmd_vmd_npc.debug.column_scaled_weight"))
         frame.FlexRows:AddColumn(L("mmd_vmd_npc.debug.column_target"))
         frame.FlexRows.OnRowSelected = function(_, _, line)
             if not IsValid(frame.UnresolvedMorphCombo) or not line then return end
@@ -2089,7 +2235,7 @@ function MMDVMDNPC.OpenDebugMenu(motionID, vmdFrame)
         frame.UnresolvedMorphCombo = vgui.Create("DComboBox", flexOverrideRow)
         frame.UnresolvedMorphCombo:Dock(LEFT)
         frame.UnresolvedMorphCombo:SetWide(360)
-        frame.UnresolvedMorphCombo:SetTooltip(L("mmd_vmd_npc.debug.unresolved_morph"))
+        frame.UnresolvedMorphCombo:SetTooltip(L("mmd_vmd_npc.debug.motion_flex"))
 
         frame.ModelFlexCombo = vgui.Create("DComboBox", flexOverrideRow)
         frame.ModelFlexCombo:Dock(LEFT)
@@ -2103,7 +2249,16 @@ function MMDVMDNPC.OpenDebugMenu(motionID, vmdFrame)
         frame.AssignFlexOverride:SetWide(130)
         frame.AssignFlexOverride:SetText(L("mmd_vmd_npc.debug.assign_flex"))
         frame.AssignFlexOverride.DoClick = function()
-            request_flex_override(frame, false)
+            request_flex_override(frame, "save")
+        end
+
+        frame.UnassignFlexOverride = vgui.Create("DButton", flexOverrideRow)
+        frame.UnassignFlexOverride:Dock(LEFT)
+        frame.UnassignFlexOverride:DockMargin(6, 0, 0, 0)
+        frame.UnassignFlexOverride:SetWide(130)
+        frame.UnassignFlexOverride:SetText(L("mmd_vmd_npc.debug.unassign_flex"))
+        frame.UnassignFlexOverride.DoClick = function()
+            request_flex_override(frame, "unassign")
         end
 
         frame.ClearFlexOverride = vgui.Create("DButton", flexOverrideRow)
@@ -2112,8 +2267,44 @@ function MMDVMDNPC.OpenDebugMenu(motionID, vmdFrame)
         frame.ClearFlexOverride:SetWide(130)
         frame.ClearFlexOverride:SetText(L("mmd_vmd_npc.debug.clear_flex_mapping"))
         frame.ClearFlexOverride.DoClick = function()
-            request_flex_override(frame, true)
+            request_flex_override(frame, "clear")
         end
+
+        local flexScalePanel = vgui.Create("DPanel", frame)
+        flexScalePanel:Dock(BOTTOM)
+        flexScalePanel:SetTall(64)
+
+        local function refresh_after_flex_scale_change()
+            timer.Create("MMDVMDNPCDebugFlexScaleRefresh", 0.15, 1, function()
+                if IsValid(frame) then
+                    MMDVMDNPC.OpenDebugMenu(frame.MotionID, frame.ActiveFrame or frame.RequestedFrame or 0)
+                end
+            end)
+        end
+
+        local function add_flex_scale_slider(parent, label, cvarName)
+            local slider = vgui.Create("DNumSlider", parent)
+            slider:Dock(LEFT)
+            slider:SetWide(320)
+            slider:SetText(label)
+            slider:SetConVar(cvarName)
+            slider:SetMinMax(0, 3)
+            slider:SetDecimals(2)
+            slider:SetValue(convar_float(cvarName, 1))
+            slider.OnValueChanged = refresh_after_flex_scale_change
+            return slider
+        end
+
+        local flexScaleRow1 = vgui.Create("DPanel", flexScalePanel)
+        flexScaleRow1:Dock(TOP)
+        flexScaleRow1:SetTall(32)
+        local flexScaleRow2 = vgui.Create("DPanel", flexScalePanel)
+        flexScaleRow2:Dock(FILL)
+
+        frame.FlexScaleAll = add_flex_scale_slider(flexScaleRow1, L("mmd_vmd_npc.debug.flex_scale_all"), "mmd_vmd_npc_flex_scale_all")
+        frame.FlexScaleEye = add_flex_scale_slider(flexScaleRow1, L("mmd_vmd_npc.debug.flex_scale_eye"), "mmd_vmd_npc_flex_scale_eye")
+        frame.FlexScaleBrow = add_flex_scale_slider(flexScaleRow2, L("mmd_vmd_npc.debug.flex_scale_brow"), "mmd_vmd_npc_flex_scale_brow")
+        frame.FlexScaleMouth = add_flex_scale_slider(flexScaleRow2, L("mmd_vmd_npc.debug.flex_scale_mouth"), "mmd_vmd_npc_flex_scale_mouth")
 
         local options = vgui.Create("DPanel", frame)
         options:Dock(BOTTOM)
@@ -2185,6 +2376,25 @@ function MMDVMDNPC.OpenDebugMenu(motionID, vmdFrame)
             if target then
                 MMDVMDNPC.OpenDebugMenu(frame.MotionID, math.max(DEBUG_REFERENCE_FRAME, math.floor(target)))
             end
+        end
+
+        frame.PlayPreview = vgui.Create("DButton", controls)
+        frame.PlayPreview:Dock(LEFT)
+        frame.PlayPreview:DockMargin(6, 0, 0, 0)
+        frame.PlayPreview:SetWide(90)
+        frame.PlayPreview:SetText(L("mmd_vmd_npc.debug.play_preview"))
+        frame.PlayPreview.DoClick = function()
+            start_debug_preview_playback(frame)
+        end
+
+        frame.PausePreview = vgui.Create("DButton", controls)
+        frame.PausePreview:Dock(LEFT)
+        frame.PausePreview:DockMargin(6, 0, 0, 0)
+        frame.PausePreview:SetWide(90)
+        frame.PausePreview:SetText(L("mmd_vmd_npc.debug.pause_preview"))
+        frame.PausePreview:SetEnabled(false)
+        frame.PausePreview.DoClick = function()
+            set_debug_preview_playing(frame, false)
         end
 
         frame.Next = vgui.Create("DButton", controls)
@@ -2284,6 +2494,9 @@ net.Receive("mmdvmd_debug_response", function()
     end
 
     frame.ActiveFrame = activeFrame
+    frame.StartFrame = startFrame
+    frame.EndFrame = endFrame
+    frame.DebugFPS = fps
     frame.PrevFrame = prevFrame
     frame.NextFrame = nextFrame
 
@@ -2339,6 +2552,7 @@ net.Receive("mmdvmd_debug_response", function()
                 row.mmd,
                 row.source,
                 fmt_num(row.weight),
+                fmt_num(row.scaledWeight ~= nil and row.scaledWeight or scaled_flex_weight(row)),
                 row.resolved and (tostring(row.resolvedName or "") .. " #" .. tostring(row.flexID)) or "unresolved"
             )
         end
@@ -2347,6 +2561,14 @@ net.Receive("mmdvmd_debug_response", function()
 
     frame.Prev:SetEnabled(activeFrame > DEBUG_REFERENCE_FRAME)
     frame.Next:SetEnabled(activeFrame < endFrame)
+    update_debug_preview_play_buttons(frame)
+    if frame.DebugPreviewPlaying == true then
+        if activeFrame >= endFrame then
+            set_debug_preview_playing(frame, false)
+        else
+            schedule_debug_preview_next(frame, fps)
+        end
+    end
 end)
 
 net.Receive("mmdvmd_build_progress", function()

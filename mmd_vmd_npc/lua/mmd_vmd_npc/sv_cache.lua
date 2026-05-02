@@ -2,10 +2,13 @@ MMDVMDNPC = MMDVMDNPC or {}
 MMDVMDNPC.Cache = MMDVMDNPC.Cache or {}
 MMDVMDNPC.FlexAliases = MMDVMDNPC.FlexAliases or nil
 MMDVMDNPC.FlexOverrides = MMDVMDNPC.FlexOverrides or nil
+MMDVMDNPC.FlexOverrideUnassigned = MMDVMDNPC.FlexOverrideUnassigned or "__mmd_vmd_npc_unassigned__"
 
 local EXPECTED_FORMAT = "mmd_vmd_npc_parent_corrected_axis_v1"
-local FLEX_MAPPING_PATH = "mmd_vmd_npc/flex_mapping_table.txt"
+local FLEX_MAPPING_DATA_PATH = "mmd_vmd_npc/flex_mapping_table.json"
+local FLEX_MAPPING_STATIC_PATH = "data_static/mmd_vmd_npc/flex_mapping_table.json"
 local STATIC_MOTION_ROOT = "data_static/" .. MMDVMDNPC.MotionRoot
+local FLEX_OVERRIDE_UNASSIGNED = MMDVMDNPC.FlexOverrideUnassigned
 
 local function number_or(value, fallback)
     local out = tonumber(value)
@@ -99,14 +102,6 @@ local function normalize_flex_track(raw, index)
     }
 end
 
-local function parse_quoted_values(line)
-    local out = {}
-    for value in string.gmatch(tostring(line or ""), '"([^"]*)"') do
-        out[#out + 1] = value
-    end
-    return out
-end
-
 local function normalize_flex_name(name)
     name = string.lower(tostring(name or ""))
     name = string.gsub(name, "[%s_%-]+", "")
@@ -193,6 +188,10 @@ function MMDVMDNPC.SetFlexOverrideForModel(modelPath, mmdName, sourceName, flexN
     return true
 end
 
+function MMDVMDNPC.SetFlexUnassignedForModel(modelPath, mmdName, sourceName)
+    return MMDVMDNPC.SetFlexOverrideForModel(modelPath, mmdName, sourceName, FLEX_OVERRIDE_UNASSIGNED)
+end
+
 function MMDVMDNPC.ClearFlexOverrideForModel(modelPath, mmdName, sourceName)
     local modelKey = flex_override_model_key(modelPath)
     if modelKey == "" then return false end
@@ -225,13 +224,16 @@ function MMDVMDNPC.LoadFlexAliases()
     if MMDVMDNPC.FlexAliases then return MMDVMDNPC.FlexAliases end
 
     local aliases = {}
-    local raw = file.Read(FLEX_MAPPING_PATH, "DATA")
+    local raw = file.Read(FLEX_MAPPING_DATA_PATH, "DATA")
     if not raw then
-        raw = file.Read(FLEX_MAPPING_PATH, "GAME")
+        raw = file.Read(FLEX_MAPPING_STATIC_PATH, "GAME")
     end
 
-    for line in string.gmatch(raw or "", "[^\r\n]+") do
-        local values = parse_quoted_values(line)
+    local parsed = raw and util.JSONToTable(raw) or nil
+    local rows = istable(parsed) and (istable(parsed.aliases) and parsed.aliases or parsed) or {}
+
+    local function ingest_alias_row(values)
+        if not istable(values) then return end
         if #values > 0 then
             local canonical = values[1]
             local row = aliases[canonical] or {}
@@ -253,6 +255,10 @@ function MMDVMDNPC.LoadFlexAliases()
         end
     end
 
+    for _, values in ipairs(rows) do
+        ingest_alias_row(values)
+    end
+
     MMDVMDNPC.FlexAliases = aliases
     return aliases
 end
@@ -272,7 +278,9 @@ function MMDVMDNPC.ResolveFlexID(ent, sourceName, mmdName)
     end
 
     if ent.GetModel and MMDVMDNPC.FlexOverrideForModel then
-        add_candidate(MMDVMDNPC.FlexOverrideForModel(ent:GetModel() or "", sourceName, mmdName))
+        local override = MMDVMDNPC.FlexOverrideForModel(ent:GetModel() or "", sourceName, mmdName)
+        if override == FLEX_OVERRIDE_UNASSIGNED then return -1, "" end
+        add_candidate(override)
     end
     add_candidate(sourceName)
     add_candidate(mmdName)

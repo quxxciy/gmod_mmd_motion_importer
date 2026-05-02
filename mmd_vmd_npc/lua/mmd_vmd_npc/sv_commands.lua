@@ -2865,6 +2865,28 @@ net.Receive("mmdvmd_flex_override_clear", function(_, ply)
     send_motion_details(ply, MMDVMDNPC.ToolOptions())
 end)
 
+net.Receive("mmdvmd_flex_override_unassign", function(_, ply)
+    local ent = net.ReadEntity()
+    local motionID = net.ReadString()
+    local mmdName = net.ReadString()
+    local sourceName = net.ReadString()
+
+    if not is_usable_npc(ent) or MMDVMDNPC.DebugTargets[ply] ~= ent then return end
+    if not MMDVMDNPC.SetFlexUnassignedForModel or not MMDVMDNPC.SetFlexUnassignedForModel(ent:GetModel() or "", mmdName, sourceName) then
+        send_play_status(ply, "error", "failed to unassign flex mapping", ent)
+        return
+    end
+
+    local removed = invalidate_built_for_model(ent:GetModel() or "")
+    send_play_status(
+        ply,
+        "built",
+        string.format("unassigned flex mapping for %s; removed %d built cache(s) for this model", tostring(mmdName ~= "" and mmdName or sourceName), removed),
+        ent
+    )
+    send_motion_details(ply, MMDVMDNPC.ToolOptions())
+end)
+
 net.Receive("mmdvmd_select_target", function(_, ply)
     local ent = net.ReadEntity()
     local ok, err = MMDVMDNPC.SelectTargetForPlayer(ply, ent)
