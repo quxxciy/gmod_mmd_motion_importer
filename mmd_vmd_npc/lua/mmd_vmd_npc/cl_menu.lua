@@ -12,6 +12,7 @@ MMDVMDNPC.AudioOffsets = MMDVMDNPC.AudioOffsets or {}
 MMDVMDNPC.AudioChannels = MMDVMDNPC.AudioChannels or {}
 MMDVMDNPC.LocalPlaybacks = MMDVMDNPC.LocalPlaybacks or {}
 MMDVMDNPC.ActivePlaybackEnts = MMDVMDNPC.ActivePlaybackEnts or {}
+MMDVMDNPC.ClientCVarSuppressions = MMDVMDNPC.ClientCVarSuppressions or {}
 MMDVMDNPC.SelfPlaybackCameraEnt = MMDVMDNPC.SelfPlaybackCameraEnt or nil
 MMDVMDNPC.SelfCameraDistance = MMDVMDNPC.SelfCameraDistance or nil
 MMDVMDNPC.SelfCameraYaw = MMDVMDNPC.SelfCameraYaw or nil
@@ -20,6 +21,7 @@ MMDVMDNPC.SelfCameraBaseCenter = MMDVMDNPC.SelfCameraBaseCenter or nil
 MMDVMDNPC.SelfCameraCenterOffset = MMDVMDNPC.SelfCameraCenterOffset or Vector(0, 0, 0)
 
 local DEBUG_REFERENCE_FRAME = -1
+local BUILD_DUMMY_SUPPRESSED_CVARS = { "skirt_vrd_auto_apply_all" }
 
 local function L(key, fallback)
     return MMDVMDNPC.L and MMDVMDNPC.L(key, fallback) or (fallback or key)
@@ -959,10 +961,63 @@ local function sorted_client_metadata(map)
     return out
 end
 
+local function optional_client_convar(name)
+    if not GetConVar then return nil end
+    return GetConVar(name)
+end
+
+local function begin_client_cvar_suppression(names)
+    local token = {}
+    for _, name in ipairs(names or {}) do
+        local cvar = optional_client_convar(name)
+        if cvar then
+            local state = MMDVMDNPC.ClientCVarSuppressions[name]
+            if not state then
+                state = {
+                    original = cvar:GetString(),
+                    count = 0,
+                }
+                MMDVMDNPC.ClientCVarSuppressions[name] = state
+                RunConsoleCommand(name, "0")
+            end
+            state.count = (state.count or 0) + 1
+            token[#token + 1] = name
+        end
+    end
+    return #token > 0 and token or nil
+end
+
+local function end_client_cvar_suppression(token)
+    for _, name in ipairs(token or {}) do
+        local state = MMDVMDNPC.ClientCVarSuppressions[name]
+        if state then
+            state.count = math.max(0, (state.count or 1) - 1)
+            if state.count <= 0 then
+                MMDVMDNPC.ClientCVarSuppressions[name] = nil
+                if optional_client_convar(name) then
+                    RunConsoleCommand(name, tostring(state.original or "0"))
+                end
+            end
+        end
+    end
+end
+
+local function begin_build_dummy_cvar_suppression()
+    if MMDVMDNPC.BuildDummyCVarSuppression then return end
+    MMDVMDNPC.BuildDummyCVarSuppression = begin_client_cvar_suppression(BUILD_DUMMY_SUPPRESSED_CVARS)
+end
+
+local function end_build_dummy_cvar_suppression()
+    if not MMDVMDNPC.BuildDummyCVarSuppression then return end
+    end_client_cvar_suppression(MMDVMDNPC.BuildDummyCVarSuppression)
+    MMDVMDNPC.BuildDummyCVarSuppression = nil
+end
+
 local function destroy_build_dummy()
     local dummy = MMDVMDNPC.BuildDummy
     MMDVMDNPC.BuildDummy = nil
     if IsValid(dummy) then dummy:Remove() end
+    end_build_dummy_cvar_suppression()
 end
 
 local function build_dummy_for_target(target)
@@ -972,6 +1027,7 @@ local function build_dummy_for_target(target)
     local dummy = MMDVMDNPC.BuildDummy
     if not IsValid(dummy) or dummy:GetModel() ~= model then
         destroy_build_dummy()
+        begin_build_dummy_cvar_suppression()
         dummy = ClientsideModel(model, RENDERGROUP_OTHER)
         MMDVMDNPC.BuildDummy = dummy
     end
@@ -1394,8 +1450,6 @@ hook.Add("Think", "MMDVMDNPCLocalInterpolatedPlayback", function()
             local upperIndex = math.Clamp(upperFrame - startFrame + 1, 1, #frames)
 
             local pelvis = GetConVar("mmd_vmd_npc_pelvis_z_offset")
-            -- print(string.format("[MMDVMDNPC] Applying local playback sample for frame %.2f (lower: %d, upper: %d, fraction: %.2f)", sourceFrame, lowerFrame, upperFrame, fraction))
-            print(("  pelvisZOffset: " .. (pelvis and pelvis:GetFloat() or 0)))
             apply_local_built_sample(ent, frames[lowerIndex], frames[upperIndex], fraction, pelvis and pelvis:GetFloat() or 0)
             apply_local_eye_tracking(ent, state, now)
 

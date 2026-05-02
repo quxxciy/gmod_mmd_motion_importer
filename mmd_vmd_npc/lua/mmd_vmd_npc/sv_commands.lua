@@ -23,8 +23,9 @@ local SOURCE_PELVIS = "ValveBiped.Bip01_Pelvis"
 local SOURCE_RIGHT_UPPER_ARM = "ValveBiped.Bip01_R_UpperArm"
 local SOURCE_RIGHT_FOREARM = "ValveBiped.Bip01_R_Forearm"
 local RPE_BODY_CVAR = "sv_rpe_living_body_enable"
+local SKIRT_VRD_AUTO_APPLY_CVAR = "skirt_vrd_auto_apply_all"
 local RPE_BODY_SUPPRESSED_CVARS = { RPE_BODY_CVAR }
-local BUILD_SUPPRESSED_CVARS = { RPE_BODY_CVAR }
+local BUILD_SUPPRESSED_CVARS = { RPE_BODY_CVAR, SKIRT_VRD_AUTO_APPLY_CVAR }
 local PLAYBACK_SUPPRESSED_CVARS = { "sv_rpe_living_combat_enable", "sv_rpe_eye_track_enable" }
 local DEBUG_REFERENCE_FRAME = -1
 local EYE_TRACK_BONE_MOVE_BACK = 0.08
@@ -720,6 +721,11 @@ function MMDVMDNPC.SelectTargetForPlayer(ply, ent)
         local message = actor_select_prompt()
         send_target_status(ply, message)
         return false, message
+    end
+    if not ai_disabled_enabled() then
+        local ok, message = fail_ai_disabled_required(ply, false)
+        send_target_status(ply, message)
+        return ok, message
     end
     local ok, referenceOrErr = require_reference_sequence_for_actor(ply, ent, false)
     if not ok then return false, referenceOrErr end
@@ -3166,6 +3172,12 @@ function MMDVMDNPC.AssignActorForPlayer(ply, ent, motionID, options, playbackSet
         send_target_status(ply, message)
         send_assignment_status(ply)
         return false, message
+    end
+    if not ai_disabled_enabled() then
+        local ok, message = fail_ai_disabled_required(ply, false)
+        send_target_status(ply, message)
+        send_assignment_status(ply)
+        return ok, message
     end
 
     local set = compact_assignments(ply)
