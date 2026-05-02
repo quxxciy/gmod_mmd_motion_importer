@@ -111,7 +111,7 @@ TOOL.ClientConVar = {
     music_enabled = "1",
     music_volume = "1",
     build_frames_per_batch = "16",
-    playback_hz = "240",
+    playback_hz = "120",
 }
 
 if CLIENT then
@@ -163,6 +163,10 @@ end
 local function open_selected_motion(tool, trace)
     local owner = tool:GetOwner()
     local ent = trace and trace.Entity or nil
+    if not IsValid(ent) or not ((ent.IsNPC and ent:IsNPC()) or (ent.IsPlayer and ent:IsPlayer())) then
+        ent = MMDVMDNPC.DebugTargets and MMDVMDNPC.DebugTargets[owner] or nil
+    end
+
     if not IsValid(ent) or not ((ent.IsNPC and ent:IsNPC()) or (ent.IsPlayer and ent:IsPlayer())) then
         notify_blocked(owner, L("mmd_vmd_npc.error.shift_right_click_valid_actor"))
         return false

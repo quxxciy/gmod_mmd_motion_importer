@@ -103,7 +103,7 @@ CreateClientConVar("mmd_vmd_npc_eye_track_pos_lr", tostring(MMDVMDNPC.DefaultEye
 CreateClientConVar("mmd_vmd_npc_music_enabled", "1", true, false, L("mmd_vmd_npc.ui.play_imported_music"))
 CreateClientConVar("mmd_vmd_npc_music_volume", tostring(MMDVMDNPC.DefaultMusicVolume or 1), true, false, L("mmd_vmd_npc.ui.music_volume"))
 CreateClientConVar("mmd_vmd_npc_build_frames_per_batch", tostring(MMDVMDNPC.DefaultBuildFramesPerBatch or 16), true, false, L("mmd_vmd_npc.ui.build_frames_per_batch"))
-CreateClientConVar("mmd_vmd_npc_playback_hz", tostring(MMDVMDNPC.DefaultPlaybackHz or 240), true, false, L("mmd_vmd_npc.ui.playback_updates_per_second"))
+CreateClientConVar("mmd_vmd_npc_playback_hz", tostring(MMDVMDNPC.DefaultPlaybackHz or 120), true, false, L("mmd_vmd_npc.ui.playback_updates_per_second"))
 CreateClientConVar("mmd_vmd_npc_flex_scale_all", "1", true, false, L("mmd_vmd_npc.debug.flex_scale_all"))
 CreateClientConVar("mmd_vmd_npc_flex_scale_eye", "1", true, false, L("mmd_vmd_npc.debug.flex_scale_eye"))
 CreateClientConVar("mmd_vmd_npc_flex_scale_brow", "1", true, false, L("mmd_vmd_npc.debug.flex_scale_brow"))
@@ -193,7 +193,7 @@ local function selected_playback_settings()
         musicEnabled = not musicEnabled or musicEnabled:GetBool(),
         musicVolume = math.Clamp(musicVolume and musicVolume:GetFloat() or MMDVMDNPC.DefaultMusicVolume or 1, 0, 2),
         buildFramesPerBatch = math.Clamp(math.floor(buildFrames and buildFrames:GetFloat() or MMDVMDNPC.DefaultBuildFramesPerBatch or 16), MMDVMDNPC.MinBuildFramesPerBatch or 1, MMDVMDNPC.MaxBuildFramesPerBatch or 128),
-        playbackHz = math.Clamp(playbackHz and playbackHz:GetFloat() or MMDVMDNPC.DefaultPlaybackHz or 240, MMDVMDNPC.MinPlaybackHz or 10, MMDVMDNPC.MaxPlaybackHz or 240),
+        playbackHz = math.Clamp(playbackHz and playbackHz:GetFloat() or MMDVMDNPC.DefaultPlaybackHz or 120, MMDVMDNPC.MinPlaybackHz or 10, MMDVMDNPC.MaxPlaybackHz or 240),
     }
 end
 
@@ -209,7 +209,7 @@ local function write_selected_playback_settings()
     net.WriteBool(settings.musicEnabled ~= false)
     net.WriteFloat(settings.musicVolume or MMDVMDNPC.DefaultMusicVolume or 1)
     net.WriteFloat(settings.buildFramesPerBatch or MMDVMDNPC.DefaultBuildFramesPerBatch or 16)
-    net.WriteFloat(settings.playbackHz or MMDVMDNPC.DefaultPlaybackHz or 240)
+    net.WriteFloat(settings.playbackHz or MMDVMDNPC.DefaultPlaybackHz or 120)
 end
 
 function MMDVMDNPC.RequestBuildSelectedMotion()
@@ -571,7 +571,7 @@ local ZERO_VECTOR = Vector(0, 0, 0)
 local ZERO_ANGLE = Angle(0, 0, 0)
 local SOURCE_PELVIS = "ValveBiped.Bip01_Pelvis"
 local SOURCE_SPINE = "ValveBiped.Bip01_Spine"
-local LOCAL_PLAYBACK_HZ = 240
+local LOCAL_PLAYBACK_HZ = 120
 local EYE_TRACK_BONE_MOVE_BACK = 0.10
 local EYE_TRACK_BONE_POS_UD = 0.5
 local EYE_TRACK_BONE_POS_LR = 0.5
@@ -2183,9 +2183,17 @@ function MMDVMDNPC.OpenDebugMenu(motionID, vmdFrame)
             set_debug_preview_playing(frame, false)
         end
 
+        frame.TargetModelLabel = vgui.Create("DLabel", frame)
+        frame.TargetModelLabel:Dock(TOP)
+        frame.TargetModelLabel:DockMargin(8, 6, 8, 0)
+        frame.TargetModelLabel:SetTall(22)
+        frame.TargetModelLabel:SetTextColor(Color(80, 170, 255))
+        frame.TargetModelLabel:SetFont("DermaDefaultBold")
+        frame.TargetModelLabel:SetText(L("mmd_vmd_npc.debug.selected_model_none"))
+
         frame.Summary = vgui.Create("DLabel", frame)
         frame.Summary:Dock(TOP)
-        frame.Summary:DockMargin(8, 6, 8, 4)
+        frame.Summary:DockMargin(8, 2, 8, 4)
         frame.Summary:SetTall(38)
         frame.Summary:SetWrap(true)
 
@@ -2499,6 +2507,16 @@ net.Receive("mmdvmd_debug_response", function()
     frame.DebugFPS = fps
     frame.PrevFrame = prevFrame
     frame.NextFrame = nextFrame
+
+    if IsValid(frame.TargetModelLabel) then
+        local target = targetEntIndex and targetEntIndex > 0 and Entity(targetEntIndex) or nil
+        local model = IsValid(target) and target.GetModel and target:GetModel() or ""
+        if model ~= "" then
+            frame.TargetModelLabel:SetText(LF("mmd_vmd_npc.debug.selected_model_fmt", model))
+        else
+            frame.TargetModelLabel:SetText(L("mmd_vmd_npc.debug.selected_model_none"))
+        end
+    end
 
     if IsValid(frame.FrameEntry) then
         frame.FrameEntry:SetValue(tostring(activeFrame))

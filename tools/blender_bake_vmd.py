@@ -251,7 +251,12 @@ def find_imported_armature(before: set[str]) -> bpy.types.Object:
 def import_model(model_path: Path) -> bpy.types.Object:
     before = {obj.name for obj in bpy.data.objects}
     print(f"Importing MMD model: {model_path}")
-    call_operator(bpy.ops.mmd_tools.import_model, filepath=str(model_path))
+    print("Importing PMX without rigid bodies or joints; they are not needed for visual baking.")
+    call_operator(
+        bpy.ops.mmd_tools.import_model,
+        filepath=str(model_path),
+        types={"MESH", "ARMATURE", "DISPLAY", "MORPHS"},
+    )
     armature = find_imported_armature(before)
     set_active(armature)
     print(f"Imported MMD model: {model_path}")
